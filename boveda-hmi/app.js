@@ -1,30 +1,39 @@
 const video = document.getElementById('videoInput');
 const canvas = document.getElementById('overlayCanvas');
 const statusBox = document.getElementById('status-box');
-const btnConectarBT = document.getElementById('btnConectarBT');
-const btnIniciarVoz = document.getElementById('btnIniciarVoz');
+const tituloFase = document.getElementById('titulo-fase');
+const btnConectarSerial = document.getElementById('btnConectarSerial');
+const btnSimularHuella = document.getElementById('btnSimularHuella');
+const btnReiniciarSistema = document.getElementById('btnReiniciarSistema');
 
 // Configuración
-const INTEGRANTES = ['david']; 
+const INTEGRANTES = ['david']; // Nombre sin extensión en ./registros/
 const RUTA_MODELOS = './models';
 const RUTA_FOTOS = './registros';
 const UMBRAL_DISTANCIA = 0.50;
+const BAUD_RATE = 9600;
 
 // Temporizaciones (en milisegundos)
-const TIEMPO_ROSTRO_ESTATICO_MS = 2000; // 2 segundos continuos firme
-const TIMEOUT_ERROR_FACIAL_MS = 30000;  // 30 s sin presencia para limpiar aviso
-const TIMEOUT_VOZ_MS = 60000;          // 60 s para dictar clave
-const TIEMPO_BLOQUEO_MS = 60000;       // 60 s de penalización por 3 fallos
+const TIEMPO_ROSTRO_ESTATICO_MS = 2000; // 2 s continuos firme frente a cámara
+const TIEMPO_PAUSA_ERROR_MS = 3000;     // 3 s mostrando claramente el error en pantalla
+const TIMEOUT_ERROR_FACIAL_MS = 30000;  // 30 s sin presencia para limpiar contador de fallos
+const TIMEOUT_VOZ_MS = 60000;           // 60 s para dictar palabra clave (TO=1)
+const TIMEOUT_HUELLA_MS = 60000;        // 60 s esperando huella en AS608 (TO=1)
+const TIEMPO_BLOQUEO_MS = 60000;        // 60 s de penalización por 3 fallos (S4)
 
-// Variables de estado
+// Variables de estado del sistema
 let labeledFaceDescriptors = null;
+let globalFaceMatcher = null;
+let globalDisplaySize = null;
 let intervalDeteccion = null;
-let bluetoothCharacteristic = null;
 
-let estadoActual = 'ESPERA_ROSTRO'; 
+// Estados HMI: 'ESPERA_ROSTRO' | 'PAUSA_ERROR' | 'APROBADO' | 'FASE_VOZ' | 'FASE_HUELLA' | 'BOVEDA_ABIERTA' | 'BLOQUEADO'
+let estadoActual = 'ESPERA_ROSTRO';
 let tiempoPrimerAvistamiento = null;
 let temporizadorInactividad = null;
+let temporizadorPausaError = null;
 let temporizadorVoz = null;
+let temporizadorHuella = null;
 let temporizadorBloqueo = null;
 let recognitionInstance = null;
 
@@ -32,6 +41,15 @@ let recognitionInstance = null;
 let contadorFallos = 0;
 const MAX_FALLOS = 3;
 
+// Variables Web Serial API (CP2102 / ESP32)
+let serialPort = null;
+let serialWriter = null;
+let serialReader = null;
+let leyendoSerial = false;
+
+// =========================================================================
+// 1. INICIALIZACIÓN DE MODELOS Y CÁMARA
+// =========================================================================
 async function inicializar() {
   try {
     actualizarInterfaz('Cargando modelos de IA...', '#333');
@@ -41,14 +59,14 @@ async function inicializar() {
       faceapi.nets.faceRecognitionNet.loadFromUri(RUTA_MODELOS)
     ]);
 
-    actualizarInterfaz('Cargando credenciales...', '#333');
+    actualizarInterfaz('Cargando credenciales autorizadas...', '#333');
     labeledFaceDescriptors = await cargarRostrosAutorizados();
 
     actualizarInterfaz('Iniciando sensor de video...', '#333');
     await iniciarCamara();
   } catch (err) {
     console.error(err);
-    actualizarInterfaz(`Fallo: ${err.message}`, '#8b0000');
+    actualizarInterfaz(`Fallo de inicio: ${err.message}`, '#8b0000');
   }
 }
 
@@ -72,17 +90,27 @@ async function iniciarCamara() {
 }
 
 video.addEventListener('play', () => {
-  const displaySize = { width: video.clientWidth || 640, height: video.clientHeight || 480 };
-  faceapi.matchDimensions(canvas, displaySize);
-  const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, UMBRAL_DISTANCIA);
+  globalDisplaySize = { width: video.clientWidth || 640, height: video.clientHeight || 480 };
+  faceapi.matchDimensions(canvas, globalDisplaySize);
+  globalFaceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, UMBRAL_DISTANCIA);
 
-  iniciarEscaneoFacial(faceMatcher, displaySize);
+  iniciarEscaneoFacial();
 });
 
-function iniciarEscaneoFacial(faceMatcher, displaySize) {
+// =========================================================================
+// 2. FASE 1: RECONOCIMIENTO FACIAL (S0)
+// =========================================================================
+function iniciarEscaneoFacial() {
+  limpiarTodosLosTemporizadores();
   estadoActual = 'ESPERA_ROSTRO';
   tiempoPrimerAvistamiento = null;
+  btnSimularHuella.disabled = true;
+
+  tituloFase.innerText = 'FASE 1: RECONOCIMIENTO FACIAL';
   actualizarInterfaz('SISTEMA ACTIVO: Mire a la cámara para autenticar', '#1a365d');
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (intervalDeteccion) clearInterval(intervalDeteccion);
 
@@ -96,7 +124,6 @@ function iniciarEscaneoFacial(faceMatcher, displaySize) {
 
     if (estadoActual !== 'ESPERA_ROSTRO') return;
 
-    const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (detections.length === 0) {
@@ -108,20 +135,23 @@ function iniciarEscaneoFacial(faceMatcher, displaySize) {
       tiempoPrimerAvistamiento = Date.now();
     }
 
-    const resized = faceapi.resizeResults(detections, displaySize);
+    const resized = faceapi.resizeResults(detections, globalDisplaySize);
     const primary = resized[0];
-    const match = faceMatcher.findBestMatch(primary.descriptor);
+    const match = globalFaceMatcher.findBestMatch(primary.descriptor);
     const box = primary.detection.box;
 
     const tiempoSostenido = Date.now() - tiempoPrimerAvistamiento;
 
+    // FASE A: ROSTRO EN ANÁLISIS / DE PASO (AMARILLO)
     if (tiempoSostenido < TIEMPO_ROSTRO_ESTATICO_MS) {
       dibujarRecuadro(ctx, box, '#ecc94b', 'Identificando... Quédese quieto');
       actualizarInterfaz('Rostro detectado. Manténgase firme...', '#744210');
       return;
     }
 
+    // FASE B: VEREDICTO TRAS CUMPLIR EL TIEMPO ESTÁTICO
     if (match.label !== 'unknown') {
+      // ACCESO FACIAL APROBADO -> S1
       estadoActual = 'APROBADO';
       clearInterval(intervalDeteccion);
       intervalDeteccion = null;
@@ -130,43 +160,85 @@ function iniciarEscaneoFacial(faceMatcher, displaySize) {
 
       dibujarRecuadro(ctx, box, '#38a169', `✔ AUTORIZADO: ${match.label.toUpperCase()}`);
       actualizarInterfaz(`✔ IDENTIDAD CONFIRMADA: ${match.label.toUpperCase()}`, '#22543d');
-      enviarAlESP32('F');
+      enviarComandoSerial('F');
 
       setTimeout(() => {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         iniciarFaseVoz();
-      }, 800);
+      }, 900);
 
     } else {
+      // ROSTRO NO AUTORIZADO (FALLO FORMAL)
       tiempoPrimerAvistamiento = null;
       contadorFallos++;
-      enviarAlESP32('X');
-
-      dibujarRecuadro(ctx, box, '#e53e3e', `ACCESO DENEGADO (${contadorFallos}/${MAX_FALLOS})`);
-      actualizarInterfaz(`ERROR: No autorizado. Intento ${contadorFallos} de ${MAX_FALLOS}`, '#742a2a');
+      enviarComandoSerial('E'); // Notifica error leve a FPGA/ESP32
 
       if (contadorFallos >= MAX_FALLOS) {
-        activarBloqueoSeguridad(faceMatcher, displaySize);
+        activarBloqueoSeguridad();
       } else {
-        iniciarTimeoutReinicio(TIMEOUT_ERROR_FACIAL_MS);
+        // Ventana de pausa de 3 segundos para que el error sea claramente visible
+        mostrarErrorFacialTemporal(ctx, box);
       }
     }
   }, 200);
 }
 
-function activarBloqueoSeguridad(faceMatcher, displaySize) {
+function mostrarErrorFacialTemporal(ctx, lastBox) {
+  estadoActual = 'PAUSA_ERROR';
+  let segs = Math.ceil(TIEMPO_PAUSA_ERROR_MS / 1000);
+
+  const renderAviso = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (lastBox) {
+      dibujarRecuadro(ctx, lastBox, '#e53e3e', `✖ ACCESO DENEGADO (${contadorFallos}/${MAX_FALLOS})`);
+    }
+    actualizarInterfaz(
+      `✖ ROSTRO NO RECONOCIDO — Intento ${contadorFallos} de ${MAX_FALLOS} (Reintentando en ${segs}s...)`,
+      '#9b2c2c'
+    );
+  };
+
+  renderAviso();
+
+  temporizadorPausaError = setInterval(() => {
+    segs--;
+    if (segs > 0) {
+      renderAviso();
+    } else {
+      clearInterval(temporizadorPausaError);
+      temporizadorPausaError = null;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (estadoActual === 'PAUSA_ERROR') {
+        estadoActual = 'ESPERA_ROSTRO';
+        actualizarInterfaz(`SISTEMA ACTIVO: Mire a la cámara (Fallos acumulados: ${contadorFallos}/${MAX_FALLOS})`, '#1a365d');
+        iniciarTimeoutReinicio(TIMEOUT_ERROR_FACIAL_MS);
+      }
+    }
+  }, 1000);
+}
+
+// =========================================================================
+// 3. PROTOCOLO DE BLOQUEO POR 3 FALLOS (S4 - LOCKDOWN 60s)
+// =========================================================================
+function activarBloqueoSeguridad() {
+  limpiarTodosLosTemporizadores();
   estadoActual = 'BLOQUEADO';
-  clearInterval(intervalDeteccion);
-  intervalDeteccion = null;
-  limpiarTimeoutReinicio();
+  btnSimularHuella.disabled = true;
+
+  if (intervalDeteccion) {
+    clearInterval(intervalDeteccion);
+    intervalDeteccion = null;
+  }
 
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 250);
 
-  enviarAlESP32('B');
+  enviarComandoSerial('B'); // Activa S4 en FPGA
   let segundosRestantes = TIEMPO_BLOQUEO_MS / 1000;
 
+  tituloFase.innerText = 'ALERTA DE SEGURIDAD — SISTEMA BLOQUEADO';
   actualizarInterfaz(`¡SISTEMA BLOQUEADO POR SEGURIDAD! Espere: ${segundosRestantes}s`, '#4a0e0e');
 
   temporizadorBloqueo = setInterval(() => {
@@ -177,16 +249,18 @@ function activarBloqueoSeguridad(faceMatcher, displaySize) {
       clearInterval(temporizadorBloqueo);
       temporizadorBloqueo = null;
       contadorFallos = 0;
-      tiempoPrimerAvistamiento = null;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      iniciarEscaneoFacial(faceMatcher, displaySize);
+      iniciarEscaneoFacial();
     }
   }, 1000);
 }
+
+// =========================================================================
+// 4. FASE 2: RECONOCIMIENTO DE VOZ (S1)
+// =========================================================================
 function iniciarFaseVoz() {
   estadoActual = 'FASE_VOZ';
-  actualizarInterfaz('FASE 2: AUTENTICACIÓN POR VOZ — Diga la clave (60s)', '#2b6cb0');
+  tituloFase.innerText = 'FASE 2: AUTENTICACIÓN POR VOZ';
+  actualizarInterfaz('FASE 2: Diga la palabra clave "Abrir bóveda" (60s)', '#2b6cb0');
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
@@ -200,30 +274,48 @@ function iniciarFaseVoz() {
   recognitionInstance.interimResults = false;
 
   temporizadorVoz = setTimeout(() => {
-    abortarFaseVoz('Tiempo agotado en fase de voz. Reiniciando...');
+    enviarComandoSerial('T'); // Notifica Timeout (TO=1) a la FPGA para volver a S0
+    abortarFaseVoz('Tiempo agotado en fase de voz (60s). Reiniciando...');
   }, TIMEOUT_VOZ_MS);
 
   recognitionInstance.onresult = (event) => {
-    clearTimeout(temporizadorVoz);
     const audioTexto = event.results[0][0].transcript.toLowerCase().trim();
     console.log('[Voz recibida]:', audioTexto);
 
     if (audioTexto.includes('abrir') && (audioTexto.includes('boveda') || audioTexto.includes('bóveda'))) {
-      actualizarInterfaz(`✔ CLAVE CORRECTA ("${audioTexto}"). PASE AL SENSOR DE HUELLA`, '#22543d');
-      enviarAlESP32('V'); // Fase 2 OK
+      clearTimeout(temporizadorVoz);
+      temporizadorVoz = null;
+      recognitionInstance = null;
+
+      enviarComandoSerial('V'); // Fase 2 OK -> FPGA pasa a S2 (Huella)
+      iniciarFaseHuella(audioTexto);
     } else {
-      actualizarInterfaz(`Clave incorrecta: "${audioTexto}". Intente de nuevo...`, '#742a2a');
-      enviarAlESP32('X');
-      setTimeout(() => {
-        if (estadoActual === 'FASE_VOZ') {
-          try { recognitionInstance.start(); } catch (_) {}
+      contadorFallos++;
+      enviarComandoSerial('E');
+
+      if (contadorFallos >= MAX_FALLOS) {
+        if (recognitionInstance) {
+          try { recognitionInstance.stop(); } catch (_) {}
+          recognitionInstance = null;
         }
-      }, 1000);
+        activarBloqueoSeguridad();
+      } else {
+        actualizarInterfaz(
+          `✖ Clave incorrecta: "${audioTexto}" (${contadorFallos}/${MAX_FALLOS}). Intente de nuevo...`,
+          '#9b2c2c'
+        );
+        setTimeout(() => {
+          if (estadoActual === 'FASE_VOZ') {
+            actualizarInterfaz('FASE 2: Diga la palabra clave "Abrir bóveda"', '#2b6cb0');
+            try { recognitionInstance.start(); } catch (_) {}
+          }
+        }, 2000);
+      }
     }
   };
 
-  recognitionInstance.onerror = () => {
-    if (estadoActual === 'FASE_VOZ') {
+  recognitionInstance.onerror = (e) => {
+    if (estadoActual === 'FASE_VOZ' && e.error !== 'aborted') {
       try { recognitionInstance.start(); } catch (_) {}
     }
   };
@@ -237,19 +329,205 @@ function abortarFaseVoz(mensaje) {
     recognitionInstance = null;
   }
   clearTimeout(temporizadorVoz);
+  temporizadorVoz = null;
+  contadorFallos = 0;
   actualizarInterfaz(mensaje, '#742a2a');
 
   setTimeout(() => {
-    const displaySize = { width: video.clientWidth || 640, height: video.clientHeight || 480 };
-    const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, UMBRAL_DISTANCIA);
-    iniciarEscaneoFacial(faceMatcher, displaySize);
-  }, 2000);
+    iniciarEscaneoFacial();
+  }, 2500);
 }
+
+// =========================================================================
+// 5. FASE 3: HUELLA DIGITAL AS608 (S2) Y APERTURA (S3)
+// =========================================================================
+function iniciarFaseHuella(fraseValidada) {
+  estadoActual = 'FASE_HUELLA';
+  btnSimularHuella.disabled = false;
+
+  tituloFase.innerText = 'FASE 3: VERIFICACIÓN DE HUELLA DIGITAL';
+  actualizarInterfaz(
+    `✔ CLAVE "${fraseValidada.toUpperCase()}" ACEPTADA — Coloque su dedo en el sensor AS608`,
+    '#2c5282'
+  );
+
+  // Timeout de 60s sincronizado con S2 de la FPGA
+  temporizadorHuella = setTimeout(() => {
+    btnSimularHuella.disabled = true;
+    contadorFallos = 0;
+    actualizarInterfaz('Tiempo agotado en sensor de huella. Reiniciando...', '#742a2a');
+    setTimeout(() => iniciarEscaneoFacial(), 2000);
+  }, TIMEOUT_HUELLA_MS);
+}
+
+function manejarBovedaAbierta() {
+  if (temporizadorHuella) {
+    clearTimeout(temporizadorHuella);
+    temporizadorHuella = null;
+  }
+  estadoActual = 'BOVEDA_ABIERTA';
+  btnSimularHuella.disabled = true;
+  contadorFallos = 0;
+
+  tituloFase.innerText = 'ACCESO CONCEDIDO — BÓVEDA ABIERTA';
+  actualizarInterfaz('✔ HUELLA VERIFICADA — BÓVEDA ABIERTA (Esperando cierre de compuerta...)', '#22543d');
+}
+
+function manejarCierrePuerta() {
+  tituloFase.innerText = 'BÓVEDA CERRADA';
+  actualizarInterfaz('Compuerta cerrada. Restableciendo sistema de seguridad...', '#1a365d');
+  setTimeout(() => {
+    iniciarEscaneoFacial();
+  }, 1500);
+}
+
+// =========================================================================
+// 6. COMUNICACIÓN WEB SERIAL BIDIRECCIONAL (CP2102 / ESP32 @ 9600 BAUDIOS)
+// =========================================================================
+async function conectarPuertoSerial() {
+  if (!('serial' in navigator)) {
+    alert('Tu navegador no soporta Web Serial API. Usa Google Chrome o Microsoft Edge en escritorio.');
+    return;
+  }
+
+  try {
+    // Si ya estaba conectado, desconectar limpiamente
+    if (serialPort) {
+      leyendoSerial = false;
+      if (serialReader) {
+        await serialReader.cancel();
+        serialReader = null;
+      }
+      if (serialWriter) {
+        serialWriter.releaseLock();
+        serialWriter = null;
+      }
+      await serialPort.close();
+      serialPort = null;
+      btnConectarSerial.innerText = 'Conectar Puerto Serial (USB)';
+      btnConectarSerial.classList.remove('conectado');
+      return;
+    }
+
+    serialPort = await navigator.serial.requestPort();
+    await serialPort.open({ baudRate: BAUD_RATE });
+
+    serialWriter = serialPort.writable.getWriter();
+    btnConectarSerial.innerText = '✔ Serial Conectado (9600 bps)';
+    btnConectarSerial.classList.add('conectado');
+    console.log('[SERIAL] Puerto abierto correctamente a 9600 baudios.');
+
+    escucharPuertoSerial();
+  } catch (err) {
+    console.error('[SERIAL ERROR]:', err);
+    serialPort = null;
+    serialWriter = null;
+  }
+}
+
+async function escucharPuertoSerial() {
+  leyendoSerial = true;
+  const decoder = new TextDecoder();
+
+  while (serialPort && serialPort.readable && leyendoSerial) {
+    serialReader = serialPort.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await serialReader.read();
+        if (done) break;
+        if (value) {
+          const texto = decoder.decode(value);
+          for (const char of texto) {
+            procesarDatoEntrante(char);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[SERIAL LECTURA]:', err);
+    } finally {
+      serialReader.releaseLock();
+      serialReader = null;
+    }
+  }
+}
+
+function procesarDatoEntrante(char) {
+  console.log(`[ENTRADA SERIAL]: '${char}'`);
+
+  switch (char) {
+    case 'H': // ESP32 confirma huella válida en el AS608
+      if (estadoActual === 'FASE_HUELLA') {
+        manejarBovedaAbierta();
+      }
+      break;
+
+    case 'E': // ESP32 reporta huella no reconocida en el AS608
+      if (estadoActual === 'FASE_HUELLA') {
+        contadorFallos++;
+        if (contadorFallos >= MAX_FALLOS) {
+          activarBloqueoSeguridad();
+        } else {
+          actualizarInterfaz(
+            `✖ HUELLA NO RECONOCIDA (${contadorFallos}/${MAX_FALLOS}). Intente nuevamente...`,
+            '#9b2c2c'
+          );
+        }
+      }
+      break;
+
+    case 'C': // FPGA notifica que la puerta física se cerró (P=0)
+      if (estadoActual === 'BOVEDA_ABIERTA') {
+        manejarCierrePuerta();
+      }
+      break;
+
+    case 'B': // Bloqueo reportado desde hardware
+      if (estadoActual !== 'BLOQUEADO') {
+        activarBloqueoSeguridad();
+      }
+      break;
+  }
+}
+
+async function enviarComandoSerial(caracter) {
+  console.log(`[SALIDA SERIAL -> FPGA/ESP32]: '${caracter}'`);
+  if (serialWriter) {
+    try {
+      const data = new TextEncoder().encode(caracter);
+      await serialWriter.write(data);
+    } catch (err) {
+      console.error('[SERIAL ENVÍO ERROR]:', err);
+    }
+  }
+}
+
+// =========================================================================
+// 7. EVENTOS DE BOTONES Y UTILIDADES
+// =========================================================================
+btnConectarSerial.addEventListener('click', conectarPuertoSerial);
+
+// Botón temporal para probar la transición a S3 sin tener el AS608 conectado hoy
+btnSimularHuella.addEventListener('click', () => {
+  if (estadoActual === 'FASE_HUELLA') {
+    enviarComandoSerial('H');
+    manejarBovedaAbierta();
+  }
+});
+
+btnReiniciarSistema.addEventListener('click', () => {
+  if (recognitionInstance) {
+    try { recognitionInstance.stop(); } catch (_) {}
+    recognitionInstance = null;
+  }
+  contadorFallos = 0;
+  enviarComandoSerial('R');
+  iniciarEscaneoFacial();
+});
 
 function iniciarTimeoutReinicio(ms) {
   limpiarTimeoutReinicio();
   temporizadorInactividad = setTimeout(() => {
-    contadorFallos = 0; 
+    contadorFallos = 0;
     actualizarInterfaz('SISTEMA ACTIVO: Mire a la cámara para autenticar', '#1a365d');
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -261,6 +539,14 @@ function limpiarTimeoutReinicio() {
     clearTimeout(temporizadorInactividad);
     temporizadorInactividad = null;
   }
+}
+
+function limpiarTodosLosTemporizadores() {
+  limpiarTimeoutReinicio();
+  if (temporizadorPausaError) { clearInterval(temporizadorPausaError); temporizadorPausaError = null; }
+  if (temporizadorVoz) { clearTimeout(temporizadorVoz); temporizadorVoz = null; }
+  if (temporizadorHuella) { clearTimeout(temporizadorHuella); temporizadorHuella = null; }
+  if (temporizadorBloqueo) { clearInterval(temporizadorBloqueo); temporizadorBloqueo = null; }
 }
 
 function dibujarRecuadro(ctx, box, color, etiqueta) {
@@ -280,14 +566,6 @@ function dibujarRecuadro(ctx, box, color, etiqueta) {
 function actualizarInterfaz(texto, colorFondo) {
   statusBox.innerText = texto;
   if (colorFondo) statusBox.style.backgroundColor = colorFondo;
-}
-
-function enviarAlESP32(caracter) {
-  console.log(`[SALIDA COMANDO]: ${caracter}`);
-  if (bluetoothCharacteristic) {
-    const data = new TextEncoder().encode(caracter);
-    bluetoothCharacteristic.writeValue(data).catch(console.error);
-  }
 }
 
 window.onload = inicializar;
