@@ -11,7 +11,7 @@ const INTEGRANTES = ['david']; // Nombre sin extensión en ./registros/
 const RUTA_MODELOS = './models';
 const RUTA_FOTOS = './registros';
 const UMBRAL_DISTANCIA = 0.50;
-const BAUD_RATE = 9600;
+const WS_URL = 'ws://127.0.0.1:8765'; // Puente USB-Serial en Termux (9600 bps)
 
 // Temporizaciones (en milisegundos)
 const TIEMPO_ROSTRO_ESTATICO_MS = 2000; // 2 s continuos firme frente a cámara
@@ -41,16 +41,15 @@ let recognitionInstance = null;
 let contadorFallos = 0;
 const MAX_FALLOS = 3;
 
-// Variables Web Serial API (CP2102 / ESP32)
-let serialPort = null;
-let serialWriter = null;
-let serialReader = null;
-let leyendoSerial = false;
+// Conexión WebSocket hacia el puente Python en Termux
+let wsSerial = null;
 
 // =========================================================================
 // 1. INICIALIZACIÓN DE MODELOS Y CÁMARA
 // =========================================================================
 async function inicializar() {
+  conectarPuenteUSB();
+
   try {
     actualizarInterfaz('Cargando modelos de IA...', '#333');
     await Promise.all([
@@ -82,11 +81,30 @@ async function cargarRostrosAutorizados() {
 }
 
 async function iniciarCamara() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-    audio: false
-  });
-  video.srcObject = stream;
+  // Solicita permiso inicial para poder listar etiquetas de cámaras disponibles
+  let tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  const dispositivos = await navigator.mediaDevices.enumerateDevices();
+  const camaras = dispositivos.filter((d) => d.kind === 'videoinput');
+
+  // Busca si hay webcam externa USB (HP) conectada al hub; si no, usa la frontal
+  const camaraExterna = camaras.find((c) => /usb|hp|external|uvc/i.test(c.label));
+
+  if (camaraExterna) {
+    tempStream.getTracks().forEach((t) => t.stop());
+    const streamUSB = await navigator.mediaDevices.getUserMedia({
+      video: {
+        deviceId: { exact: camaraExterna.deviceId },
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      },
+      audio: false
+    });
+    video.srcObject = streamUSB;
+    console.log('[CÁMARA] Usando webcam externa:', camaraExterna.label);
+  } else {
+    video.srcObject = tempStream;
+    console.log('[CÁMARA] Usando cámara integrada de la tablet.');
+  }
 }
 
 video.addEventListener('play', () => {
@@ -151,7 +169,6 @@ function iniciarEscaneoFacial() {
 
     // FASE B: VEREDICTO TRAS CUMPLIR EL TIEMPO ESTÁTICO
     if (match.label !== 'unknown') {
-      // ACCESO FACIAL APROBADO -> S1
       estadoActual = 'APROBADO';
       clearInterval(intervalDeteccion);
       intervalDeteccion = null;
@@ -166,17 +183,14 @@ function iniciarEscaneoFacial() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         iniciarFaseVoz();
       }, 900);
-
     } else {
-      // ROSTRO NO AUTORIZADO (FALLO FORMAL)
       tiempoPrimerAvistamiento = null;
       contadorFallos++;
-      enviarComandoSerial('E'); // Notifica error leve a FPGA/ESP32
+      enviarComandoSerial('E');
 
       if (contadorFallos >= MAX_FALLOS) {
         activarBloqueoSeguridad();
       } else {
-        // Ventana de pausa de 3 segundos para que el error sea claramente visible
         mostrarErrorFacialTemporal(ctx, box);
       }
     }
@@ -235,7 +249,7 @@ function activarBloqueoSeguridad() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 250);
 
-  enviarComandoSerial('B'); // Activa S4 en FPGA
+  enviarComandoSerial('B');
   let segundosRestantes = TIEMPO_BLOQUEO_MS / 1000;
 
   tituloFase.innerText = 'ALERTA DE SEGURIDAD — SISTEMA BLOQUEADO';
@@ -274,7 +288,7 @@ function iniciarFaseVoz() {
   recognitionInstance.interimResults = false;
 
   temporizadorVoz = setTimeout(() => {
-    enviarComandoSerial('T'); // Notifica Timeout (TO=1) a la FPGA para volver a S0
+    enviarComandoSerial('T');
     abortarFaseVoz('Tiempo agotado en fase de voz (60s). Reiniciando...');
   }, TIMEOUT_VOZ_MS);
 
@@ -287,7 +301,7 @@ function iniciarFaseVoz() {
       temporizadorVoz = null;
       recognitionInstance = null;
 
-      enviarComandoSerial('V'); // Fase 2 OK -> FPGA pasa a S2 (Huella)
+      enviarComandoSerial('V');
       iniciarFaseHuella(audioTexto);
     } else {
       contadorFallos++;
@@ -351,7 +365,6 @@ function iniciarFaseHuella(fraseValidada) {
     '#2c5282'
   );
 
-  // Timeout de 60s sincronizado con S2 de la FPGA
   temporizadorHuella = setTimeout(() => {
     btnSimularHuella.disabled = true;
     contadorFallos = 0;
@@ -382,86 +395,50 @@ function manejarCierrePuerta() {
 }
 
 // =========================================================================
-// 6. COMUNICACIÓN WEB SERIAL BIDIRECCIONAL (CP2102 / ESP32 @ 9600 BAUDIOS)
+// 6. PUENTE WEBSOCKET <-> CABLE USB OTG (TERMUX @ 9600 BAUDIOS)
 // =========================================================================
-async function conectarPuertoSerial() {
-  if (!('serial' in navigator)) {
-    alert('Tu navegador no soporta Web Serial API. Usa Google Chrome o Microsoft Edge en escritorio.');
+function conectarPuenteUSB() {
+  if (wsSerial && (wsSerial.readyState === WebSocket.OPEN || wsSerial.readyState === WebSocket.CONNECTING)) {
     return;
   }
 
-  try {
-    // Si ya estaba conectado, desconectar limpiamente
-    if (serialPort) {
-      leyendoSerial = false;
-      if (serialReader) {
-        await serialReader.cancel();
-        serialReader = null;
-      }
-      if (serialWriter) {
-        serialWriter.releaseLock();
-        serialWriter = null;
-      }
-      await serialPort.close();
-      serialPort = null;
-      btnConectarSerial.innerText = 'Conectar Puerto Serial (USB)';
-      btnConectarSerial.classList.remove('conectado');
-      return;
-    }
+  wsSerial = new WebSocket(WS_URL);
 
-    serialPort = await navigator.serial.requestPort();
-    await serialPort.open({ baudRate: BAUD_RATE });
-
-    serialWriter = serialPort.writable.getWriter();
-    btnConectarSerial.innerText = '✔ Serial Conectado (9600 bps)';
+  wsSerial.onopen = () => {
+    console.log('[USB-BRIDGE] Conectado al puente serial de Termux.');
+    btnConectarSerial.innerText = '✔ Cable USB Conectado (9600 bps)';
     btnConectarSerial.classList.add('conectado');
-    console.log('[SERIAL] Puerto abierto correctamente a 9600 baudios.');
+  };
 
-    escucharPuertoSerial();
-  } catch (err) {
-    console.error('[SERIAL ERROR]:', err);
-    serialPort = null;
-    serialWriter = null;
-  }
-}
-
-async function escucharPuertoSerial() {
-  leyendoSerial = true;
-  const decoder = new TextDecoder();
-
-  while (serialPort && serialPort.readable && leyendoSerial) {
-    serialReader = serialPort.readable.getReader();
-    try {
-      while (true) {
-        const { value, done } = await serialReader.read();
-        if (done) break;
-        if (value) {
-          const texto = decoder.decode(value);
-          for (const char of texto) {
-            procesarDatoEntrante(char);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[SERIAL LECTURA]:', err);
-    } finally {
-      serialReader.releaseLock();
-      serialReader = null;
+  wsSerial.onmessage = (event) => {
+    const datos = String(event.data);
+    for (const char of datos) {
+      procesarDatoEntrante(char);
     }
-  }
+  };
+
+  wsSerial.onclose = () => {
+    btnConectarSerial.innerText = 'Reconectar Cable USB (OTG)';
+    btnConectarSerial.classList.remove('conectado');
+    setTimeout(conectarPuenteUSB, 3000);
+  };
+
+  wsSerial.onerror = (err) => {
+    console.warn('[USB-BRIDGE] Esperando puente Python en Termux...', err);
+  };
 }
 
 function procesarDatoEntrante(char) {
-  console.log(`[ENTRADA SERIAL]: '${char}'`);
+  console.log(`[ENTRADA CABLE USB]: '${char}'`);
 
   switch (char) {
-    case 'H': // ESP32 confirma huella válida en el AS608
+    case 'H':
       if (estadoActual === 'FASE_HUELLA') {
         manejarBovedaAbierta();
       }
       break;
 
-    case 'E': // ESP32 reporta huella no reconocida en el AS608
+    case 'E':
       if (estadoActual === 'FASE_HUELLA') {
         contadorFallos++;
         if (contadorFallos >= MAX_FALLOS) {
@@ -475,13 +452,13 @@ function procesarDatoEntrante(char) {
       }
       break;
 
-    case 'C': // FPGA notifica que la puerta física se cerró (P=0)
+    case 'C':
       if (estadoActual === 'BOVEDA_ABIERTA') {
         manejarCierrePuerta();
       }
       break;
 
-    case 'B': // Bloqueo reportado desde hardware
+    case 'B':
       if (estadoActual !== 'BLOQUEADO') {
         activarBloqueoSeguridad();
       }
@@ -489,24 +466,18 @@ function procesarDatoEntrante(char) {
   }
 }
 
-async function enviarComandoSerial(caracter) {
-  console.log(`[SALIDA SERIAL -> FPGA/ESP32]: '${caracter}'`);
-  if (serialWriter) {
-    try {
-      const data = new TextEncoder().encode(caracter);
-      await serialWriter.write(data);
-    } catch (err) {
-      console.error('[SERIAL ENVÍO ERROR]:', err);
-    }
+function enviarComandoSerial(caracter) {
+  console.log(`[SALIDA CABLE USB -> ESP32/FPGA]: '${caracter}'`);
+  if (wsSerial && wsSerial.readyState === WebSocket.OPEN) {
+    wsSerial.send(caracter);
   }
 }
 
 // =========================================================================
 // 7. EVENTOS DE BOTONES Y UTILIDADES
 // =========================================================================
-btnConectarSerial.addEventListener('click', conectarPuertoSerial);
+btnConectarSerial.addEventListener('click', conectarPuenteUSB);
 
-// Botón temporal para probar la transición a S3 sin tener el AS608 conectado hoy
 btnSimularHuella.addEventListener('click', () => {
   if (estadoActual === 'FASE_HUELLA') {
     enviarComandoSerial('H');
