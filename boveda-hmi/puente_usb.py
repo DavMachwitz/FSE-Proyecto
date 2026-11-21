@@ -11,7 +11,7 @@ WS_PORT = 8765
 
 class CP2102Termux:
     def __init__(self, fd):
-        # Inicializa libusb sin enumerar el bus completo (restricción Android sin root)
+        # Inicializa libusb sin enumerar el bus completo (restriccion Android sin root)
         backend = usb.backend.libusb1.get_backend()
         backend.lib.libusb_set_option(backend.ctx, 2)  # LIBUSB_OPTION_NO_DEVICE_DISCOVERY = 2
         self.dev = usb.core.find(backend=backend, custom_match=lambda d: True)
@@ -110,7 +110,7 @@ async def main():
         cp2102 = CP2102Termux(fd)
         print(f"[USB REAL] CP2102 inicializado a {BAUD_RATE} bps (FD={fd})")
     else:
-        print("[MODO SIMULACIÓN] Ejecuta vía termux-usb para hardware real.")
+        print("[MODO SIMULACION] Ejecuta via termux-usb para hardware real.")
 
     print(f"Puente WebSocket activo en ws://127.0.0.1:{WS_PORT}")
     async with websockets.serve(manejar_conexion, "127.0.0.1", WS_PORT):
