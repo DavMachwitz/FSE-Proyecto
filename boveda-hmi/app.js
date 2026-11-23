@@ -7,7 +7,11 @@ const btnSimularHuella = document.getElementById('btnSimularHuella');
 const btnReiniciarSistema = document.getElementById('btnReiniciarSistema');
 
 // Configuración
+<<<<<<< HEAD
+const INTEGRANTES = ['david', 'santiago', 'abner']; 
+=======
 const INTEGRANTES = ['david']; // Nombre sin extensión en ./registros/
+>>>>>>> 90715d6cbd2598c05d77d437764ece85a334d970
 const RUTA_MODELOS = './models';
 const RUTA_FOTOS = './registros';
 const UMBRAL_DISTANCIA = 0.50;
