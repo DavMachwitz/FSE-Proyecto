@@ -178,7 +178,9 @@ function iniciarEscaneoFacial() {
 
       dibujarRecuadro(ctx, box, '#38a169', `✔ AUTORIZADO: ${match.label.toUpperCase()}`);
       actualizarInterfaz(`✔ IDENTIDAD CONFIRMADA: ${match.label.toUpperCase()}`, '#22543d');
-      enviarComandoSerial('F');
+      const CODIGOS_USUARIO = { santiago: '1', david: '2', abner: '3' };
+      const codigoUsuario = CODIGOS_USUARIO[match.label.toLowerCase()] || '1';
+      enviarComandoSerial(codigoUsuario);
 
       setTimeout(() => {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -454,7 +456,17 @@ function procesarDatoEntrante(char) {
       break;
 
     case 'C':
-      if (estadoActual === 'BOVEDA_ABIERTA') {
+      if (estadoActual === 'FASE_HUELLA') {
+        contadorFallos++;
+        if (contadorFallos >= MAX_FALLOS) {
+          activarBloqueoSeguridad();
+        } else {
+          actualizarInterfaz(
+            `ERROR DE AUTENTICACIÓN CRUZADA: La huella no corresponde al usuario (${contadorFallos}/${MAX_FALLOS})`,
+            '#9b2c2c'
+          );
+        }
+      } else if (estadoActual === 'BOVEDA_ABIERTA') {
         manejarCierrePuerta();
       }
       break;
