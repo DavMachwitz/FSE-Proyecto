@@ -8,8 +8,7 @@ const btnReiniciarSistema = document.getElementById('btnReiniciarSistema');
 
 // Configuración
 
-const INTEGRANTES = ['david', 'santiago', 'abner']; 
-const INTEGRANTES = ['david']; // Nombre sin extensión en ./registros/
+const INTEGRANTES = ['david', 'santiago', 'abner'];
 const RUTA_MODELOS = './models';
 const RUTA_FOTOS = './registros';
 const UMBRAL_DISTANCIA = 0.50;
