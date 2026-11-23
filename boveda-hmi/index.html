@@ -14,14 +14,17 @@
       margin: 0;
       padding: 20px;
     }
-    h1 { margin-bottom: 5px; font-size: 24px; }
+    h1 { margin-bottom: 5px; font-size: 24px; letter-spacing: 1px; }
     #status-box {
       margin: 10px 0;
-      padding: 10px 20px;
+      padding: 12px 24px;
       border-radius: 8px;
       font-weight: bold;
       font-size: 18px;
       background-color: #333;
+      min-width: 580px;
+      text-align: center;
+      transition: background-color 0.2s ease;
     }
     .video-container {
       position: relative;
@@ -41,26 +44,36 @@
     .controls {
       margin-top: 15px;
       display: flex;
-      gap: 15px;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
     }
     button {
-      padding: 10px 20px;
-      font-size: 16px;
+      padding: 10px 18px;
+      font-size: 15px;
+      font-weight: bold;
       border: none;
-      border-radius: 5px;
+      border-radius: 6px;
       cursor: pointer;
       background-color: #007acc;
       color: white;
+      transition: background-color 0.2s ease;
     }
-    button:hover { background-color: #005999; }
+    button:hover:not(:disabled) { background-color: #005999; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #btnConectarSerial.conectado { background-color: #2f855a; }
+    #btnSimularHuella { background-color: #6b46c1; }
+    #btnSimularHuella:hover:not(:disabled) { background-color: #553c9a; }
+    #btnReiniciarSistema { background-color: #c53030; }
+    #btnReiniciarSistema:hover { background-color: #9b2c2c; }
   </style>
   <!-- Importar face-api.js local -->
   <script defer src="face-api.min.js"></script>
-  <script defer src="app.js?v=2"></script>
+  <script defer src="app.js?v=3"></script>
 </head>
 <body>
 
-  <h1>PRUEBA FACIAL</h1>
+  <h1 id="titulo-fase">CONTROL DE ACCESO BIOMÉTRICO</h1>
   <div id="status-box">Iniciando sistema... Cargando modelos...</div>
 
   <div class="video-container">
@@ -69,8 +82,9 @@
   </div>
 
   <div class="controls">
-    <button id="btnConectarBT"></button>
-    <button id="btnIniciarVoz" disabled></button>
+    <button id="btnConectarSerial">Conectar Puerto Serial (USB)</button>
+    <button id="btnSimularHuella" disabled>Simular Huella OK ('H')</button>
+    <button id="btnReiniciarSistema">Reiniciar Sistema ('R')</button>
   </div>
 
 </body>
