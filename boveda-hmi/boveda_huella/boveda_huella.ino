@@ -203,10 +203,34 @@ bool esperarSinDedo(uint32_t timeout) {
   return false;
 }
 
+void borrarHuella();
+
 void revisarSerial() {
   if (!Serial.available()) return;
   char c = Serial.read();
   if (c == 'r' || c == 'R') registrarHuella();
+  else if (c == 'd' || c == 'D') borrarHuella();
+}
+
+void borrarHuella() {
+  Serial.println(F("\n=== BORRAR HUELLA ==="));
+  Serial.print(F("Escribe el ID a borrar (1 a ")); Serial.print(maxId); Serial.println(F(") y Enter:"));
+  limpiarSerial();
+  int id = leerLinea().toInt();
+  if (id < 1 || id > (int)maxId) { Serial.println(F("ID invalido.")); return; }
+
+  uint8_t p = finger.deleteModel(id);
+  if (p == FINGERPRINT_OK) {
+    finger.getTemplateCount();
+    Serial.print(F("EXITO: ID #")); Serial.print(id);
+    Serial.print(F(" borrado | Huellas guardadas: ")); Serial.println(finger.templateCount);
+  } else if (p == FINGERPRINT_BADLOCATION) {
+    Serial.println(F("No se pudo borrar en esa ubicacion."));
+  } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+    Serial.println(F("Error de comunicacion con el sensor."));
+  } else {
+    Serial.print(F("Error al borrar (codigo 0x")); Serial.print(p, HEX); Serial.println(F(")"));
+  }
 }
 
 void registrarHuella() {
