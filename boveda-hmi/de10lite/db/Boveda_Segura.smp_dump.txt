@@ -1,0 +1,22 @@
+
+State Machine - |control_boveda|estado_actual
+Name estado_actual.S4_BLOQUEO_TOTAL estado_actual.S3_BOVEDA_ABIERTA estado_actual.S2_HUELLA estado_actual.S1_VOZ estado_actual.S0_REPOSO_FACIAL 
+estado_actual.S0_REPOSO_FACIAL 0 0 0 0 0 
+estado_actual.S1_VOZ 0 0 0 1 1 
+estado_actual.S2_HUELLA 0 0 1 0 1 
+estado_actual.S3_BOVEDA_ABIERTA 0 1 0 0 1 
+estado_actual.S4_BLOQUEO_TOTAL 1 0 0 0 1 
+
+State Machine - |control_boveda|uart_transceiver:U_UART|tx_state
+Name tx_state.TX_STOP_BIT tx_state.TX_DATA_BITS tx_state.TX_START_BIT tx_state.TX_IDLE 
+tx_state.TX_IDLE 0 0 0 0 
+tx_state.TX_START_BIT 0 0 1 1 
+tx_state.TX_DATA_BITS 0 1 0 1 
+tx_state.TX_STOP_BIT 1 0 0 1 
+
+State Machine - |control_boveda|uart_transceiver:U_UART|rx_state
+Name rx_state.RX_STOP_BIT rx_state.RX_DATA_BITS rx_state.RX_START_BIT rx_state.RX_IDLE 
+rx_state.RX_IDLE 0 0 0 0 
+rx_state.RX_START_BIT 0 0 1 1 
+rx_state.RX_DATA_BITS 0 1 0 1 
+rx_state.RX_STOP_BIT 1 0 0 1 

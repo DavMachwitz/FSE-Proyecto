@@ -1,0 +1,105 @@
+{
+	"partitions" : [
+		{
+			"name" : "Top",
+			"pins" : [
+				{
+					"name" : "uart_tx",
+					"strict" : false
+				},
+				{
+					"name" : "hab_huella",
+					"strict" : false
+				},
+				{
+					"name" : "user_id[0]",
+					"strict" : false
+				},
+				{
+					"name" : "user_id[1]",
+					"strict" : false
+				},
+				{
+					"name" : "cerrojo_digital",
+					"strict" : false
+				},
+				{
+					"name" : "servo_pwm",
+					"strict" : false
+				},
+				{
+					"name" : "buzzer",
+					"strict" : false
+				},
+				{
+					"name" : "leds_fase[0]",
+					"strict" : false
+				},
+				{
+					"name" : "leds_fase[1]",
+					"strict" : false
+				},
+				{
+					"name" : "leds_fase[2]",
+					"strict" : false
+				},
+				{
+					"name" : "rgb_r",
+					"strict" : false
+				},
+				{
+					"name" : "rgb_g",
+					"strict" : false
+				},
+				{
+					"name" : "ledr_estado[0]",
+					"strict" : false
+				},
+				{
+					"name" : "ledr_estado[1]",
+					"strict" : false
+				},
+				{
+					"name" : "ledr_estado[2]",
+					"strict" : false
+				},
+				{
+					"name" : "ledr_estado[3]",
+					"strict" : false
+				},
+				{
+					"name" : "ledr_estado[4]",
+					"strict" : false
+				},
+				{
+					"name" : "CLOCK_50",
+					"strict" : false
+				},
+				{
+					"name" : "reset_n",
+					"strict" : false
+				},
+				{
+					"name" : "huella_ok",
+					"strict" : false
+				},
+				{
+					"name" : "huella_err",
+					"strict" : false
+				},
+				{
+					"name" : "huella_cruz",
+					"strict" : false
+				},
+				{
+					"name" : "sensor_puerta",
+					"strict" : false
+				},
+				{
+					"name" : "uart_rx",
+					"strict" : false
+				}
+			]
+		}
+	]
+}
