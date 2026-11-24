@@ -61,15 +61,14 @@
     }
     button:hover:not(:disabled) { background-color: #005999; }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
-    #btnConectarSerial.conectado { background-color: #2f855a; }
-    #btnSimularHuella { background-color: #6b46c1; }
-    #btnSimularHuella:hover:not(:disabled) { background-color: #553c9a; }
+    /* Ocultos visualmente sin romper referencias en app.js */
+    #btnConectarSerial, #btnSimularHuella { display: none; }
     #btnReiniciarSistema { background-color: #c53030; }
     #btnReiniciarSistema:hover { background-color: #9b2c2c; }
   </style>
   <!-- Importar face-api.js local -->
   <script defer src="face-api.min.js"></script>
-  <script defer src="app.js?v=3"></script>
+  <script defer src="app.js?v=4"></script>
 </head>
 <body>
 
@@ -84,7 +83,7 @@
   <div class="controls">
     <button id="btnConectarSerial">Conectar Puerto Serial (USB)</button>
     <button id="btnSimularHuella" disabled>Simular Huella OK ('H')</button>
-    <button id="btnReiniciarSistema">Reiniciar Sistema ('R')</button>
+    <button id="btnReiniciarSistema">Reiniciar Sistema</button>
   </div>
 
 </body>

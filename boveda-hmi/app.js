@@ -7,7 +7,6 @@ const btnSimularHuella = document.getElementById('btnSimularHuella');
 const btnReiniciarSistema = document.getElementById('btnReiniciarSistema');
 
 // Configuración
-
 const INTEGRANTES = ['david', 'santiago', 'abner'];
 const RUTA_MODELOS = './models';
 const RUTA_FOTOS = './registros';
@@ -82,12 +81,10 @@ async function cargarRostrosAutorizados() {
 }
 
 async function iniciarCamara() {
-  // Solicita permiso inicial para poder listar etiquetas de cámaras disponibles
   let tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
   const dispositivos = await navigator.mediaDevices.enumerateDevices();
   const camaras = dispositivos.filter((d) => d.kind === 'videoinput');
 
-  // Busca si hay webcam externa USB (HP) conectada al hub; si no, usa la frontal
   const camaraExterna = camaras.find((c) => /usb|hp|external|uvc/i.test(c.label));
 
   if (camaraExterna) {
@@ -207,10 +204,10 @@ function mostrarErrorFacialTemporal(ctx, lastBox) {
   const renderAviso = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (lastBox) {
-      dibujarRecuadro(ctx, lastBox, '#e53e3e', `✖ ACCESO DENEGADO (${contadorFallos}/${MAX_FALLOS})`);
+      dibujarRecuadro(ctx, lastBox, '#e53e3e', '✖ ACCESO DENEGADO');
     }
     actualizarInterfaz(
-      `✖ ROSTRO NO RECONOCIDO — Intento ${contadorFallos} de ${MAX_FALLOS} (Reintentando en ${segs}s...)`,
+      `✖ ROSTRO NO RECONOCIDO — Reintentando en ${segs}s...`,
       '#9b2c2c'
     );
   };
@@ -228,7 +225,7 @@ function mostrarErrorFacialTemporal(ctx, lastBox) {
 
       if (estadoActual === 'PAUSA_ERROR') {
         estadoActual = 'ESPERA_ROSTRO';
-        actualizarInterfaz(`SISTEMA ACTIVO: Mire a la cámara (Fallos acumulados: ${contadorFallos}/${MAX_FALLOS})`, '#1a365d');
+        actualizarInterfaz('SISTEMA ACTIVO: Mire a la cámara para autenticar', '#1a365d');
         iniciarTimeoutReinicio(TIMEOUT_ERROR_FACIAL_MS);
       }
     }
@@ -277,7 +274,7 @@ function activarBloqueoSeguridad() {
 function iniciarFaseVoz() {
   estadoActual = 'FASE_VOZ';
   tituloFase.innerText = 'FASE 2: AUTENTICACIÓN POR VOZ';
-  actualizarInterfaz('FASE 2: Diga la palabra clave "Abrir bóveda" (60s)', '#2b6cb0');
+  actualizarInterfaz('FASE 2: Diga la palabra clave "Abrir bóveda"', '#2b6cb0');
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
@@ -292,7 +289,7 @@ function iniciarFaseVoz() {
 
   temporizadorVoz = setTimeout(() => {
     enviarComandoSerial('T');
-    abortarFaseVoz('Tiempo agotado en fase de voz (60s). Reiniciando...');
+    abortarFaseVoz('Tiempo agotado en fase de voz. Reiniciando...');
   }, TIMEOUT_VOZ_MS);
 
   recognitionInstance.onresult = (event) => {
@@ -318,7 +315,7 @@ function iniciarFaseVoz() {
         activarBloqueoSeguridad();
       } else {
         actualizarInterfaz(
-          `✖ Clave incorrecta: "${audioTexto}" (${contadorFallos}/${MAX_FALLOS}). Intente de nuevo...`,
+          `✖ Clave incorrecta: "${audioTexto}". Intente de nuevo...`,
           '#9b2c2c'
         );
         setTimeout(() => {
@@ -364,7 +361,7 @@ function iniciarFaseHuella(fraseValidada) {
 
   tituloFase.innerText = 'FASE 3: VERIFICACIÓN DE HUELLA DIGITAL';
   actualizarInterfaz(
-    `✔ CLAVE "${fraseValidada.toUpperCase()}" ACEPTADA — Coloque su dedo en el sensor AS608`,
+    `✔ CLAVE "${fraseValidada.toUpperCase()}" ACEPTADA — Coloque su dedo en el sensor`,
     '#2c5282'
   );
 
@@ -448,7 +445,7 @@ function procesarDatoEntrante(char) {
           activarBloqueoSeguridad();
         } else {
           actualizarInterfaz(
-            `✖ HUELLA NO RECONOCIDA (${contadorFallos}/${MAX_FALLOS}). Intente nuevamente...`,
+            '✖ HUELLA NO RECONOCIDA. Intente nuevamente...',
             '#9b2c2c'
           );
         }
@@ -462,7 +459,7 @@ function procesarDatoEntrante(char) {
           activarBloqueoSeguridad();
         } else {
           actualizarInterfaz(
-            `ERROR DE AUTENTICACIÓN CRUZADA: La huella no corresponde al usuario (${contadorFallos}/${MAX_FALLOS})`,
+            '✖ ERROR DE AUTENTICACIÓN CRUZADA: La huella no corresponde al usuario',
             '#9b2c2c'
           );
         }
